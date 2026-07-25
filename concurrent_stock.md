@@ -1,114 +1,106 @@
 **Issue**
-`fetchStockPrices` in `prices.js` fires every symbol concurrently:
-
-```js
-const promises = symbolRanges.map(async ({ symbol, from, to }) => { ... });
-return Promise.all(promises);
-```
-
-For a 20–40 stock portfolio, that's 20–40 simultaneous requests hitting NSE (and Yahoo on fallback) in the same tick.
+`computeMissingPriceRanges` in `HelperFunctions.jsx` builds its fetch list from **every symbol that has ever traded**, including fully-exited positions.
 
 **Root Cause**
-NSE's public JSON endpoints and Yahoo both apply per-IP anti-bot rate limiting. `Promise.all` over `.map` has **no concurrency cap and no spacing** — a burst of N parallel requests from one IP looks like scraping and gets throttled/denied (429 / connection reset / empty body). Your dual-source fallback then also fires in the same burst, doubling pressure. This is why failures are intermittent and correlated with portfolio size, not specific symbols.
-
-Indices are unaffected — `/update_indices` already loops sequentially with `await`.
-
-**Fix**
-Bound concurrency to a small pool (default 3), add inter-request jitter, and retry rate-limited symbols with exponential backoff. Deterministic ordering preserved; only the dispatch is throttled. All three knobs are env-tunable.
-
-**Code** — drop-in replacement for the `fetchStockPrices` section in `prices.js` (and the two helpers above it stay as-is):
 
 ```js
-// ----------------------------------------------------------------------------
-// Concurrency + pacing config (env-tunable; safe defaults for NSE/Yahoo)
-// ----------------------------------------------------------------------------
-const PRICE_FETCH_CONCURRENCY = Number(process.env.PRICE_FETCH_CONCURRENCY) || 3;
-const PRICE_FETCH_MIN_DELAY_MS = Number(process.env.PRICE_FETCH_MIN_DELAY_MS) || 250;
-const PRICE_FETCH_MAX_RETRIES = Number(process.env.PRICE_FETCH_MAX_RETRIES) || 3;
+stocks.forEach(trade => {
+  const symbol = trade.symbol;
+  ...
+  tradeMap[symbol] = date;   // no holdings filter — includes sold-out symbols
+});
+```
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// Jitter avoids a synchronized request cadence that itself looks bot-like.
-const jitter = (base) => base + Math.floor(Math.random() * base);
+It never consults allocations/remaining qty, so any symbol with a BUY in the ledger keeps getting its price history fetched and stored, even after `remainingQty` hits 0. On Neon free tier this grows `stock_price_history` with rows the app never displays.
 
-// ----------------------------------------------------------------------------
-// mapWithConcurrency
-// Runs `worker` over `items` with at most `limit` in flight at once.
-// Preserves input order in the returned array. No external deps.
-// ----------------------------------------------------------------------------
-async function mapWithConcurrency(items, limit, worker) {
-  const results = new Array(items.length);
-  let next = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) break;
-      results[i] = await worker(items[i], i);
+**Fix**
+Filter the fetch list to symbols with remaining BUY qty > 0 using the existing `getHoldingOrders`. Two-part: (1) stop fetching exited symbols going forward, (2) optional one-time prune to reclaim rows already stored.
+
+**Code**
+
+**1 — `HelperFunctions.jsx`: gate `computeMissingPriceRanges` to held symbols**
+
+```js
+export const computeMissingPriceRanges = (stocks, priceHistory, stockTradeAllocations = []) => {
+  const lastMarketDay = getLastMarketDay();
+
+  // Only symbols still held (remaining BUY qty > 0). Fully-exited positions are
+  // skipped so price_history doesn't grow for stocks the app no longer shows.
+  const heldSymbols = new Set(
+    getHoldingOrders(stocks, stockTradeAllocations).map(h => h.symbol)
+  );
+
+  // 1️⃣ Earliest trade per HELD symbol
+  const tradeMap = {};
+  stocks.forEach(trade => {
+    if (!heldSymbols.has(trade.symbol)) return;   // ⬅ skip exited positions
+    const symbol = trade.symbol;
+    const date = trade.date;
+    if (!tradeMap[symbol] || date < tradeMap[symbol]) {
+      tradeMap[symbol] = date;
     }
   });
-  await Promise.all(runners);
-  return results;
-}
 
-// ----------------------------------------------------------------------------
-// fetchOneSymbol
-// NSE → Yahoo(NS) → Yahoo(BO) fallback for a single symbol, with retry.
-// Empty result triggers backoff+retry (treats throttle/empty as transient).
-// ----------------------------------------------------------------------------
-async function fetchOneSymbol({ symbol, from, to }) {
-  const end = new Date(to);
-  end.setDate(end.getDate() + 1);
-  const toStr = end.toISOString().slice(0, 10);
+  // 2️⃣ … rest of the function unchanged …
+```
 
-  for (let attempt = 1; attempt <= PRICE_FETCH_MAX_RETRIES; attempt++) {
-    let history = await fetchFromNSE(symbol, from, toStr);
-    let source = "nse";
-    if (!history.length) { history = await fetchFromYahoo(symbol, from, toStr, "NS"); source = "yahoo-ns"; }
-    if (!history.length) { history = await fetchFromYahoo(symbol, from, toStr, "BO"); source = "yahoo-bo"; }
+**2 — `stocklist.jsx`: pass allocations to the call**
 
-    if (history.length) {
-      console.log(`[prices] ${symbol}: fetched ${history.length} row(s) from ${source} (attempt ${attempt})`);
-      return { symbol, history };
-    }
+```js
+const missingStockRanges = helpers.computeMissingPriceRanges(
+  stocks, priceHistory, stockTradeAllocations
+);
+```
 
-    if (attempt < PRICE_FETCH_MAX_RETRIES) {
-      const backoff = jitter(PRICE_FETCH_MIN_DELAY_MS * 2 ** attempt); // 500→1000→2000ms + jitter
-      console.warn(`[prices] ${symbol}: empty (attempt ${attempt}/${PRICE_FETCH_MAX_RETRIES}), backing off ${backoff}ms`);
-      await sleep(backoff);
-    }
+**3 — (optional) `prices.js`: prune already-stored exited rows to reclaim space**
+
+```js
+// Deletes price history for any symbol NOT in the current holdings list.
+// Body: { keepSymbols: ["INFY", "TCS", ...] }
+router.post("/prune_stocks", async (req, res) => {
+  const { keepSymbols } = req.body;
+  if (!Array.isArray(keepSymbols) || keepSymbols.length === 0) {
+    return res.status(400).json({ error: "keepSymbols must be a non-empty array." });
   }
+  try {
+    const result = await pool.query(
+      `DELETE FROM stock_price_history WHERE symbol <> ALL($1) RETURNING symbol`,
+      [keepSymbols]
+    );
+    res.json({ status: "pruned", deletedRows: result.rowCount });
+  } catch (err) {
+    console.error("[prices] prune_stocks failed:", err);
+    res.status(500).json({ error: "prune failed" });
+  }
+});
+```
 
-  console.warn(`[prices] ${symbol}: no data after ${PRICE_FETCH_MAX_RETRIES} attempts for range ${from} → ${to}`);
-  return { symbol, history: [] };
-}
+**4 — (optional) trigger prune from `stocklist.jsx` inside `updatePriceHistory`, after fetch**
 
-// ----------------------------------------------------------------------------
-// fetchStockPrices
-// Bounded concurrency + inter-request jitter. Replaces the unbounded
-// Promise.all(map(...)) burst that was triggering NSE/Yahoo rate limiting.
-// ----------------------------------------------------------------------------
-async function fetchStockPrices(symbolRanges) {
-  return mapWithConcurrency(
-    symbolRanges,
-    PRICE_FETCH_CONCURRENCY,
-    async (range) => {
-      const result = await fetchOneSymbol(range);
-      await sleep(jitter(PRICE_FETCH_MIN_DELAY_MS)); // space out the next dispatch on this runner
-      return result;
-    }
-  );
+```js
+const heldSymbols = helpers.getHoldingOrders(stocks, stockTradeAllocations).map(h => h.symbol);
+if (heldSymbols.length > 0) {
+  await fetch(`${BASE_URL}/prices/prune_stocks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keepSymbols: heldSymbols }),
+  });
 }
 ```
 
-**What changed**
+**Trade-off — must decide before enabling prune (#3/#4)**
+This directly conflicts with your "historical state must be reproducible" principle. `buildStockPortfolioSeries` reconstructs daily NAV from `stock_price_history`. If you **delete** price rows for a stock you once held, the portfolio performance/NAV series for the period you *did* hold it can no longer be rebuilt — those days lose that position's valuation.
 
-* Max **3** symbols in flight instead of all N.
-* **250–500 ms jittered gap** between requests on each runner.
-* Failed/empty symbols retried up to **3×** with 500→1000→2000 ms jittered backoff (recovers the throttled ones instead of losing them).
-* Output array order unchanged; `/update_stocks` handler and `savePriceHistory` need no edits.
+Recommendation:
 
-**Tuning** (`.env`, if still throttled): drop `PRICE_FETCH_CONCURRENCY=2`, raise `PRICE_FETCH_MIN_DELAY_MS=500`.
+* **Change #1 + #2 alone** (stop fetching exited symbols) is safe *only if* you never need historical NAV before an exit. It still leaves a gap: a symbol bought and sold entirely between two refreshes may never get its held-period prices.
+* If you want both storage savings **and** correct history: keep prices only for `date >= earliest unsold lot`, i.e. prune rows **older than the position's own trade window**, not whole symbols. Safer variant:
 
-**Trade-off**
-40 stocks now take roughly `40 / 3 × (~fetch + ~350 ms)` ≈ several seconds longer per full refresh. Acceptable — price ingestion is a background/manual action, and the current failure mode is dropped data, not slowness. If you later need speed back, the right lever is server-side caching of already-fetched `(symbol, date)` ranges (you already dedupe on `ON CONFLICT DO NOTHING`), not higher concurrency.
+```sql
+DELETE FROM stock_price_history
+WHERE symbol = $1 AND date < $2;   -- $2 = earliest still-held BUY date for that symbol
+```
 
-One caveat: this throttles per **server process**. On Vercel/serverless with concurrent invocations the effective rate is per-instance, not global — if you still see denials under parallel user actions, we'd need a shared token-bucket (Redis/Neon-backed). Flag it and I'll spec that.
+* **Do not run #3/#4** if the performance chart's "ALL" range over past (now-exited) positions matters to you.
+
+Confirm which guarantee you're trading away and I'll lock the prune to match (whole-symbol vs. date-window).
