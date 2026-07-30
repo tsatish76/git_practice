@@ -1,45 +1,46 @@
     Directory: D:\Work\Investment_Tracker\Portfolio-Tracker-Backend
 
 
-Mode                 LastWriteTime         Length Name                                                                    
-----                 -------------         ------ ----                                                                    
--a----        24-06-2026  12:23 AM            345 .env                                                                    
--a----        29-06-2026  12:19 AM           6012 database.js                                                             
--a----        23-07-2026  03:01 AM            709 package.json                                                            
--a----        23-07-2026  03:02 AM         239988 package-lock.json                                                       
--a----        24-06-2026  12:52 AM          18604 PROJECT_CONTEXT.md                                                      
--a----        24-06-2026  12:23 AM             27 README.md                                                               
+Mode                 LastWriteTime         Length Name                                                           
+----                 -------------         ------ ----                                                           
+-a----        24-06-2026  12:23 AM            345 .env                                                           
+-a----        29-07-2026  07:01 AM           6374 database.js                                                    
+-a----        23-07-2026  03:01 AM            709 package.json                                                   
+-a----        23-07-2026  03:02 AM         239988 package-lock.json                                              
+-a----        24-06-2026  12:52 AM          18604 PROJECT_CONTEXT.md                                             
+-a----        24-06-2026  12:23 AM             27 README.md                                                      
 
 
     Directory: D:\Work\Investment_Tracker\Portfolio-Tracker-Backend\routes
 
 
-Mode                 LastWriteTime         Length Name                                                                    
-----                 -------------         ------ ----                                                                    
--a----        24-06-2026  12:23 AM            922 instruments.js                                                          
--a----        24-06-2026  04:09 AM           5023 mf_trade_allocations.js                                                 
--a----        26-06-2026  05:38 PM          11120 mfNavHistory.js                                                         
--a----        24-06-2026  12:23 AM           6852 mutualFundCurrentData.js                                                
--a----        25-06-2026  08:46 AM           5006 mutualFunds.js                                                          
--a----        24-06-2026  12:23 AM           4795 otherAssets.js                                                          
--a----        26-07-2026  05:06 AM          17782 prices.js                                                               
--a----        23-07-2026  03:03 AM          15352 ss.js                                                                   
--a----        24-06-2026  02:57 AM           6010 stock_trade_allocations.js                                              
--a----        24-06-2026  12:23 AM           7793 stockCurrentData.js                                                     
--a----        29-06-2026  01:55 AM           3330 uploadCSV.js                                                            
+Mode                 LastWriteTime         Length Name                                                           
+----                 -------------         ------ ----                                                           
+-a----        28-07-2026  07:06 PM           9976 instruments.js                                                 
+-a----        24-06-2026  04:09 AM           5023 mf_trade_allocations.js                                        
+-a----        26-06-2026  05:38 PM          11120 mfNavHistory.js                                                
+-a----        24-06-2026  12:23 AM           6852 mutualFundCurrentData.js                                       
+-a----        25-06-2026  08:46 AM           5006 mutualFunds.js                                                 
+-a----        24-06-2026  12:23 AM           4795 otherAssets.js                                                 
+-a----        29-07-2026  09:06 AM          17782 prices.js                                                      
+-a----        30-07-2026  04:05 PM           1602 ss.js                                                          
+-a----        24-06-2026  02:57 AM           6010 stock_trade_allocations.js                                     
+-a----        24-06-2026  12:23 AM           7793 stockCurrentData.js                                            
+-a----        24-06-2026  12:23 AM           7936 stocks.js                                                      
+-a----        29-06-2026  01:55 AM           3330 uploadCSV.js                                                   
 
 
     Directory: D:\Work\Investment_Tracker\Portfolio-Tracker-Backend
 
 
-Mode                 LastWriteTime         Length Name                                                                    
-----                 -------------         ------ ----                                                                    
--a----        26-06-2026  03:34 AM           9152 server.js                                                               
+Mode                 LastWriteTime         Length Name                                                           
+----                 -------------         ------ ----                                                           
+-a----        30-07-2026  02:11 PM           9169 server.js                                                      
 
 
     Directory: D:\Work\Investment_Tracker\Portfolio-Tracker-Backend\test
 
 
-Mode                 LastWriteTime         Length Name                                                                    
-----                 -------------         ------ ----                                                                    
--a----        24-06-2026  12:23 AM           1241 test_historical.js   
+Mode                 LastWriteTime         Length Name                                                           
+----                 -------------         ------ ----                                                           
+-a----        24-06-2026  12:23 AM           1241 test_historical.js 
