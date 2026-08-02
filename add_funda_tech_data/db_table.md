@@ -136,3 +136,109 @@ Next
 Backend service skeleton, in this order: services/stockIndicatorService.js (quoteSummary + fundamentalsTimeSeries + RSI gap-fill, reusing prices.js concurrency/jitter/retry pattern) → indicator UPSERT route in stockCurrentData.js → wire in server.js.
 
 Confirm the two firm calls and I'll emit the service + route (full files, not snippets), reusing mapWithConcurrency/toISTDateKey from prices.js rather than reinventing them.
+
+helper funcctionm missing range
+```jsx
+export const computeMissingPriceRanges = (
+  stocks,
+  priceHistory,
+  stockTradeAllocations = [],
+  instrumentsMap = {}
+) => {
+  const lastMarketDay = getLastMarketDay();
+
+  const heldSymbols = new Set(
+    getHoldingOrders(stocks, stockTradeAllocations).map((h) => h.symbol)
+  );
+
+  const tradeMap = {};
+
+  (stocks || []).forEach((trade) => {
+    if (!trade?.symbol || !trade?.date) return;
+    if (!heldSymbols.has(trade.symbol)) return;
+
+    const symbol = trade.symbol;
+    const date = normalizeDateStr(trade.date);
+    if (!date) return;
+
+    if (!tradeMap[symbol] || date < tradeMap[symbol]) {
+      tradeMap[symbol] = date;
+    }
+  });
+
+  const priceBounds = {};
+
+  (priceHistory || []).forEach((stock) => {
+    const symbol = stock?.symbol;
+    if (!symbol || !Array.isArray(stock.history) || stock.history.length === 0) return;
+
+    let min = null;
+    let max = null;
+
+    stock.history.forEach((row) => {
+      const date = normalizeDateStr(row?.date);
+      if (!date) return;
+
+      if (!min || date < min) min = date;
+      if (!max || date > max) max = date;
+    });
+
+    if (min && max) {
+      priceBounds[symbol] = { min, max };
+    }
+  });
+
+  const ranges = [];
+
+  Object.entries(tradeMap).forEach(([symbol, tradeStart]) => {
+    const bounds = priceBounds[symbol];
+    const scrip_code = instrumentsMap?.[symbol]?.scrip_code || null;
+
+    if (!bounds) {
+      if (tradeStart <= lastMarketDay) {
+        ranges.push({
+          symbol,
+          from: tradeStart,
+          to: lastMarketDay,
+          scrip_code,
+        });
+      }
+      return;
+    }
+
+    const { min, max } = bounds;
+
+    if (tradeStart < min) {
+      const beforeEnd = new Date(min);
+      beforeEnd.setDate(beforeEnd.getDate() - 1);
+
+      const to = beforeEnd.toISOString().slice(0, 10);
+
+      if (tradeStart <= to) {
+        ranges.push({
+          symbol,
+          from: tradeStart,
+          to,
+          scrip_code,
+        });
+      }
+    }
+
+    const afterStart = new Date(max);
+    afterStart.setDate(afterStart.getDate() + 1);
+
+    const from = afterStart.toISOString().slice(0, 10);
+
+    if (from <= lastMarketDay) {
+      ranges.push({
+        symbol,
+        from,
+        to: lastMarketDay,
+        scrip_code,
+      });
+    }
+  });
+
+  return ranges;
+};
+```
